@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Python / temporary files
+*.pyc
+*.pyo
+*.out
+*.err
+
+# Logs and batch outputs
+logs/
+slurm_output/
+
+# Large simulation outputs
+*.lh5
+*.parquet
+*.hdf5
+*.pdf
+
+# Specific simulation outputs
+simulation/energy.json
+simulation/energy_smeared.json
+simulation/edep.parquet
+simulation/out.lh5
+
+# Temporary RMG files
+simulation/.rmg-tmp-*
+
+# Backup files
+*.save

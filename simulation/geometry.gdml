@@ -1,0 +1,89 @@
+<?xml version="1.0" ?>
+<gdml xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://cern.ch/service-spi/app/releases/GDML/schema/gdml.xsd">
+	<define/>
+	<materials>
+		<isotope name="Ge74" Z="32" N="74">
+			<atom value="73.921"/>
+		</isotope>
+		<isotope name="Ge76" Z="32" N="76">
+			<atom value="75.921"/>
+		</isotope>
+		<element name="ElementEnrichedGermanium0.855" formula="EnrGe0.855">
+			<fraction ref="Ge74" n="0.14500000000000002"/>
+			<fraction ref="Ge76" n="0.855"/>
+		</element>
+		<material name="EnrichedGermanium0.855">
+			<D value="5.543560163603719"/>
+			<fraction ref="ElementEnrichedGermanium0.855" n="1"/>
+		</material>
+	</materials>
+	<solids>
+		<box name="World_s" x="400" y="400" z="400" lunit="mm"/>
+		<tube name="Vacuum_s" rmin="0" rmax="150" z="300" startphi="0" deltaphi="6.283185307179586" lunit="mm" aunit="rad"/>
+		<tube name="Source_s" rmin="0" rmax="1" z="1" startphi="0" deltaphi="6.283185307179586" lunit="mm" aunit="rad"/>
+		<genericPolycone name="Bob_L" startphi="0" deltaphi="6.283185307179586" lunit="mm" aunit="rad">
+			<rzpoint r="0" z="1.2"/>
+			<rzpoint r="1.6" z="1.2"/>
+			<rzpoint r="1.6" z="0"/>
+			<rzpoint r="5" z="0"/>
+			<rzpoint r="5" z="1.5"/>
+			<rzpoint r="8" z="1.5"/>
+			<rzpoint r="8" z="0"/>
+			<rzpoint r="40" z="0"/>
+			<rzpoint r="40" z="42.6"/>
+			<rzpoint r="0" z="42.6"/>
+		</genericPolycone>
+		<box name="Poly_s" x="80" y="80" z="1" lunit="mm"/>
+	</solids>
+	<structure>
+		<volume name="Source_L">
+			<materialref ref="G4_BRAIN_ICRP"/>
+			<solidref ref="Source_s"/>
+			<auxiliary auxtype="rmg_color" auxvalue="0.1,0.85,0.25,1.0"/>
+		</volume>
+		<volume name="Bob_L">
+			<materialref ref="EnrichedGermanium0.855"/>
+			<solidref ref="Bob_L"/>
+			<auxiliary auxtype="rmg_color" auxvalue="0.95,0.55,0.1,0.75"/>
+		</volume>
+		<volume name="Polyethylene_L">
+			<materialref ref="G4_POLYETHYLENE"/>
+			<solidref ref="Poly_s"/>
+			<auxiliary auxtype="rmg_color" auxvalue="0.9,0.9,0.9,0.4"/>
+		</volume>
+		<volume name="Vacuum_l">
+			<materialref ref="G4_Galactic"/>
+			<solidref ref="Vacuum_s"/>
+			<auxiliary auxtype="rmg_color" auxvalue="0,0,1,0.1"/>
+			<physvol name="Source">
+				<volumeref ref="Source_L"/>
+				<position name="Source_pos" x="0.000000000000000" y="0.000000000000000" z="1.000000000000000" unit="mm"/>
+			</physvol>
+			<physvol name="Bob">
+				<volumeref ref="Bob_L"/>
+				<position name="Bob_pos" x="0.000000000000000" y="0.000000000000000" z="-4.310000000000000" unit="cm"/>
+			</physvol>
+			<physvol name="Polyethylene">
+				<volumeref ref="Polyethylene_L"/>
+			</physvol>
+		</volume>
+		<volume name="World_l">
+			<materialref ref="G4_Galactic"/>
+			<solidref ref="World_s"/>
+			<physvol name="Vacuum">
+				<volumeref ref="Vacuum_l"/>
+			</physvol>
+		</volume>
+	</structure>
+	<userinfo>
+		<auxiliary auxtype="RMG_detector_meta" auxvalue="">
+			<auxiliary auxtype="Bob" auxvalue="{&quot;geometry&quot;: {&quot;borehole&quot;: {&quot;depth_in_mm&quot;: 1.2, &quot;radius_in_mm&quot;: 1.6}, &quot;corner_radius_in_mm&quot;: 2, &quot;groove&quot;: {&quot;depth_in_mm&quot;: 1.5, &quot;radius_in_mm&quot;: {&quot;inner&quot;: 5, &quot;outer&quot;: 8}}, &quot;height_in_mm&quot;: 42.6, &quot;pp_contact&quot;: {&quot;depth_in_mm&quot;: 1.2, &quot;radius_in_mm&quot;: 1.6}, &quot;radius_in_mm&quot;: 40, &quot;taper&quot;: {&quot;borehole&quot;: {&quot;angle_in_deg&quot;: 0, &quot;height_in_mm&quot;: 0}, &quot;bottom&quot;: {&quot;angle_in_deg&quot;: 0.0, &quot;height_in_mm&quot;: 0.0}, &quot;top&quot;: {&quot;angle_in_deg&quot;: 0.0, &quot;height_in_mm&quot;: 0.0}}}, &quot;name&quot;: &quot;bege_hpge&quot;, &quot;production&quot;: {&quot;enrichment&quot;: {&quot;unc&quot;: 0.015, &quot;val&quot;: 0.855}}, &quot;type&quot;: &quot;bege&quot;}"/>
+		</auxiliary>
+		<auxiliary auxtype="RMG_detector" auxvalue="germanium">
+			<auxiliary auxtype="Bob" auxvalue="1"/>
+		</auxiliary>
+	</userinfo>
+	<setup name="Default" version="1.0">
+		<world ref="World_l"/>
+	</setup>
+</gdml>
