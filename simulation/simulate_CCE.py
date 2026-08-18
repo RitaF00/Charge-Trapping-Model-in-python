@@ -109,7 +109,7 @@ t_max = 10000
 Nt = int(t_max/dt)
 
 
-sigma = math.sqrt(6*D*dt)*1e-4
+sigma = math.sqrt(2*D*dt)*1e-4   # evoluzione indipendente lungo le 3 direzioni
 
 
 
@@ -119,7 +119,7 @@ sigma = math.sqrt(6*D*dt)*1e-4
 
 r_Li = 0.002       # cm
 
-cell_size = r_Li
+cell_size = 2 * r_Li
 
 
 
@@ -380,6 +380,8 @@ def calculate_saturation_depth(params):
     else:
 
         saturation_depth = depth_list[idx[0]]
+
+    #print(f"saturation depth {saturation_depth} cm")
 
 
     return saturation_depth
@@ -887,7 +889,7 @@ def simulate_CCE(
 
     x_positions = np.arange(
         0,
-        args.FCCD  + step,
+        args.FCCD  + 3*step,
         step
     )
 
