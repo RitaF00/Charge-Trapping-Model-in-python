@@ -481,7 +481,6 @@ def truncated_poisson(lam, Nmax):
 def generate_lithium(params):
 
     print("")
-    print("Generating Li distribution...")
 
     # ========================================================
     # SATURATION DEPTH
@@ -489,11 +488,6 @@ def generate_lithium(params):
 
     saturation_depth = calculate_saturation_depth(params)
 
-    print(
-        "Saturation depth =",
-        saturation_depth * 10,
-        "mm"
-    )
 
     # ========================================================
     # GRID
@@ -686,10 +680,7 @@ def generate_lithium(params):
     # 2. CALCULATE P(R | x)
     # ========================================================
 
-    sigma = np.random.uniform(
-        20e-4,
-        60e-4
-    )
+    sigma =  60e-4
     # 20-60 um expressed in cm
 
     for j, xi in enumerate(x_slices):
@@ -1110,7 +1101,7 @@ def generate_lithium(params):
     # ========================================================
 
     print("")
-
+    '''
     print(
         "Total theoretical primary Li (R=20 um) =",
         np.sum(
@@ -1128,7 +1119,7 @@ def generate_lithium(params):
     print(
         "Total accepted agglomerates =",
         total_particles
-    )
+    )'''
 
     # ========================================================
     # 9. RETURN
@@ -1142,6 +1133,56 @@ def generate_lithium(params):
         particles_z,
         lithium_distribution
     )
+
+
+
+
+
+
+# ============================================================
+# NUMBA TRAPPING
+# ============================================================
+
+@njit
+def check_trapping_numba(
+        x,
+        y,
+        z,
+        particle_x,
+        particle_y,
+        particle_z,
+        N_particles,
+        r
+):
+
+
+    r2 = r*r
+
+
+
+    for i in range(N_particles):
+
+
+        dx = x - particle_x[i]
+
+        dy = y - particle_y[i]
+
+        dz = z - particle_z[i]
+
+
+
+        if (
+            dx*dx +
+            dy*dy +
+            dz*dz
+        ) < r2:
+
+            return True
+
+
+
+    return False
+
 
 
 
@@ -1348,10 +1389,6 @@ def simulate_CCE(
     ):
 
 
-        print(
-            "Charge initial position:",
-            x0
-        )
 
 
 
