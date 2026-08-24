@@ -680,7 +680,7 @@ def generate_lithium(params):
     # 2. CALCULATE P(R | x)
     # ========================================================
 
-    sigma =  60e-4
+    sigma =  20e-4
     # 20-60 um expressed in cm
 
     for j, xi in enumerate(x_slices):
