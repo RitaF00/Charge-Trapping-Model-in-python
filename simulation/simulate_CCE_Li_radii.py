@@ -571,6 +571,7 @@ def generate_lithium(params):
     # ========================================================
 
     N_target_agg = 4
+    
 
     # ========================================================
     # PROBABILITY MATRIX
@@ -680,7 +681,7 @@ def generate_lithium(params):
     # 2. CALCULATE P(R | x)
     # ========================================================
 
-    sigma =  20e-4
+    sigma =  60e-4
     # 20-60 um expressed in cm
 
     for j, xi in enumerate(x_slices):
@@ -711,7 +712,7 @@ def generate_lithium(params):
         # Target number of agglomerates
         # ----------------------------------------------------
 
-        N_agg_target = min(
+        N_agg_target = max(
             N20,
             N_target_agg
         )
@@ -903,6 +904,8 @@ def generate_lithium(params):
         # NR = N20 * (r0/R)^3
         # ----------------------------------------------------
 
+
+        '''
         N_R = int(
             np.floor(
                 N20 *
@@ -912,6 +915,18 @@ def generate_lithium(params):
                 )**3
             )
         )
+        '''
+
+
+        N_R = max(
+                    N_target_agg,
+                    int(
+                        np.floor(
+                            N20 *
+                            (r0 / R_sampled)**3
+                        )
+                    )
+                )
 
         # ----------------------------------------------------
         # SAVE THEORETICAL NUMBER
