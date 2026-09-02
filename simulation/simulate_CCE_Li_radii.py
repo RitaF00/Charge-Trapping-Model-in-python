@@ -65,6 +65,21 @@ parser.add_argument(
     help="Annealing time [s]"
 )
 
+
+parser.add_argument(
+    "--sigma_R",
+    type=float,
+    default=1080,
+    help="Radius distribution width [um]"
+)
+
+parser.add_argument(
+    "--N_min_agg",
+    type=float,
+    default=1080,
+    help="minimum number of lithium agglomerate"
+)
+
 parser.add_argument(
     "--output",
     type=str,
@@ -90,6 +105,7 @@ Lz = 0.2
 dx = 0.001      # cm = 10 um
 
 step = 0.005    # cm
+
 
 
 
@@ -157,6 +173,10 @@ def update_parameters(args):
     params["alpha"] = args.alpha
 
     params["FCCD"] = args.FCCD
+
+    params["sigma_R"] = args.sigma_R
+
+    params["N_min_agg"] = args.N_min_agg
 
     params["Ns"] = 10**(
         21.27 - 2610/params["T_ann"]
@@ -570,7 +590,7 @@ def generate_lithium(params):
     # TARGET NUMBER OF AGGLOMERATES
     # ========================================================
 
-    N_target_agg = 4
+    N_min_agg = params["N_min_agg"]
     
 
     # ========================================================
@@ -681,7 +701,8 @@ def generate_lithium(params):
     # 2. CALCULATE P(R | x)
     # ========================================================
 
-    sigma =  60e-4
+    sigma = params["sigma_R"]
+    print(sigma, "um")
     # 20-60 um expressed in cm
 
     for j, xi in enumerate(x_slices):
@@ -702,32 +723,30 @@ def generate_lithium(params):
 
         # ----------------------------------------------------
         # Physically possible radii
+        #
+        # At least 4 agglomerates must be possible
         # ----------------------------------------------------
-
+    
         possible = (
-            n_agg >= 1
+            n_agg >= N_min_agg
         )
 
         # ----------------------------------------------------
-        # Target number of agglomerates
+        # Maximum radius compatible with at least
+        # 4 agglomerates
+        #
+        # R_max = r0 * (N20 / 4)^(1/3)
         # ----------------------------------------------------
-
-        N_agg_target = max(
-            N20,
-            N_target_agg
-        )
-
-        # ----------------------------------------------------
-        # Radius conserving total volume
-        # ----------------------------------------------------
-
-        R_target = (
+    
+        R_max = (
             r0 *
             (
                 N20 /
-                N_agg_target
+                N_min_agg
             )**(1 / 3)
         )
+
+    
 
         # ----------------------------------------------------
         # Preference for target radius
@@ -738,7 +757,7 @@ def generate_lithium(params):
             (
                 (
                     radii -
-                    R_target
+                    R_max
                 ) /
                 sigma
             )**2
@@ -873,6 +892,8 @@ def generate_lithium(params):
         if N20 <= 0:
             continue
 
+        
+
         # ----------------------------------------------------
         # Sample agglomerate radius
         # ----------------------------------------------------
@@ -905,28 +926,8 @@ def generate_lithium(params):
         # ----------------------------------------------------
 
 
-        '''
-        N_R = int(
-            np.floor(
-                N20 *
-                (
-                    r0 /
-                    R_sampled
-                )**3
-            )
-        )
-        '''
 
-
-        N_R = max(
-                    N_target_agg,
-                    int(
-                        np.floor(
-                            N20 *
-                            (r0 / R_sampled)**3
-                        )
-                    )
-                )
+        N_R =int( np.floor(N20 *(r0 / R_sampled)**3 ) ) 
 
         # ----------------------------------------------------
         # SAVE THEORETICAL NUMBER
@@ -1154,6 +1155,7 @@ def generate_lithium(params):
 
 
 
+
 # ============================================================
 # NUMBA TRAPPING
 # ============================================================
@@ -1241,7 +1243,6 @@ def charge_transport_numba(
         r
 
 ):
-
 
     collected = 0
 

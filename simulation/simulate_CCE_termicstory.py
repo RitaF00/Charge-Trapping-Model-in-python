@@ -65,6 +65,28 @@ parser.add_argument(
     help="Annealing time [s]"
 )
 
+
+parser.add_argument(
+    "--sigma_R",
+    type=float,
+    default=60,
+    help="Radius distribution width [um]"
+)
+
+parser.add_argument(
+    "--N_min_agg",
+    type=float,
+    default=4,
+    help="minimum number of lithium agglomerate"
+)
+
+parser.add_argument(
+    "--shift_x",
+    type=float,
+    default=0.0,
+    help="lattice shift [cm]"
+)
+
 parser.add_argument(
     "--output",
     type=str,
@@ -90,6 +112,7 @@ Lz = 0.2
 dx = 0.001      # cm = 10 um
 
 step = 0.005    # cm
+
 
 
 
@@ -157,6 +180,12 @@ def update_parameters(args):
     params["alpha"] = args.alpha
 
     params["FCCD"] = args.FCCD
+
+    params["sigma_R"] = args.sigma_R
+
+    params["N_target_agg"] = args.N_target_agg
+
+    params["shift_x"] = args.shift_x
 
     params["Ns"] = 10**(
         21.27 - 2610/params["T_ann"]
@@ -347,48 +376,6 @@ def create_grid():
 
 
 
-
-# ============================================================
-# SATURATION DEPTH
-# ============================================================
-
-def calculate_saturation_depth(params):
-
-
-    depth_list = np.arange(
-        0,
-        0.11 + dx,
-        dx
-    )
-
-
-    Nd_vals = params["Ns"] * erfc(
-        depth_list /
-        (2*np.sqrt(params["D_Li"] * params["t_ann"]))
-    )
-
-
-    idx = np.where(
-        Nd_vals <= Nd_saturation
-    )[0]
-
-
-    if len(idx) == 0:
-
-        saturation_depth = depth_list[-1]
-
-    else:
-
-        saturation_depth = depth_list[idx[0]]
-
-    #print(f"saturation depth {saturation_depth} cm")
-
-
-    return saturation_depth
-
-
-
-
 # ============================================================
 # TRUNCATED POISSON
 # ============================================================
@@ -452,6 +439,7 @@ def calculate_saturation_depth(params):
 
         saturation_depth = depth_list[idx[0]]
 
+    #return params["FCCD"]
     return saturation_depth
 
 
@@ -570,7 +558,8 @@ def generate_lithium(params):
     # TARGET NUMBER OF AGGLOMERATES
     # ========================================================
 
-    N_target_agg = 4
+    N_target_agg = params["N_target_agg"]
+    
 
     # ========================================================
     # PROBABILITY MATRIX
@@ -680,7 +669,7 @@ def generate_lithium(params):
     # 2. CALCULATE P(R | x)
     # ========================================================
 
-    sigma =  20e-4
+    sigma =  args.sigma_R
     # 20-60 um expressed in cm
 
     for j, xi in enumerate(x_slices):
@@ -711,7 +700,7 @@ def generate_lithium(params):
         # Target number of agglomerates
         # ----------------------------------------------------
 
-        N_agg_target = min(
+        N_agg_target = max(
             N20,
             N_target_agg
         )
@@ -903,6 +892,8 @@ def generate_lithium(params):
         # NR = N20 * (r0/R)^3
         # ----------------------------------------------------
 
+
+        '''
         N_R = int(
             np.floor(
                 N20 *
@@ -912,6 +903,18 @@ def generate_lithium(params):
                 )**3
             )
         )
+        '''
+
+
+        N_R = max(
+                    N_target_agg,
+                    int(
+                        np.floor(
+                            N20 *
+                            (r0 / R_sampled)**3
+                        )
+                    )
+                )
 
         # ----------------------------------------------------
         # SAVE THEORETICAL NUMBER
@@ -1014,7 +1017,7 @@ def generate_lithium(params):
                 # ------------------------------------------------
 
                 particles_x.append(
-                    x_particle
+                    x_particle 
                 )
 
                 particles_y.append(
@@ -1041,9 +1044,26 @@ def generate_lithium(params):
     # 6. CONVERT COORDINATES TO NUMPY
     # ========================================================
 
-    particles_x = np.array(
-        particles_x
-    )
+    #particles_x = np.array(particles_x ) + 0.005
+    shift = params["shift_x"]
+
+    particles_x = np.array(particles_x)
+
+    x_max = np.max(particles_x)
+    
+    max_shift = params["FCCD"] - x_max
+    
+    if shift > max_shift:
+    
+        print(
+            f"Warning: requested shift_x = {shift:.6g} cm is too large. "
+            f"Maximum possible shift_x = {max_shift:.6g} cm. "
+            f"Using maximum allowed shift."
+        )
+    
+        shift = max_shift
+    
+    particles_x = particles_x + shift
 
     particles_y = np.array(
         particles_y
@@ -1064,7 +1084,7 @@ def generate_lithium(params):
         # ----------------------------------------------------
 
         "x":
-            x_slices,
+            x_slices ,
 
         # ----------------------------------------------------
         # Theoretical number of primary Li
@@ -1226,7 +1246,6 @@ def charge_transport_numba(
         r
 
 ):
-
 
     collected = 0
 
@@ -1638,6 +1657,7 @@ def main():
 
         CCE_std
 
+        
     ) = simulate_CCE(
 
         cells,
