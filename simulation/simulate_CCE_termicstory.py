@@ -183,7 +183,7 @@ def update_parameters(args):
 
     params["sigma_R"] = args.sigma_R
 
-    params["N_target_agg"] = args.N_target_agg
+    params["N_min_agg"] = args.N_min_agg
 
     params["shift_x"] = args.shift_x
 
@@ -462,10 +462,11 @@ def truncated_poisson(lam, Nmax):
     return Nmax
 
 
+
+
 # ============================================================
 # GENERATE LITHIUM
 # ============================================================
-
 def generate_lithium(params):
 
     print("")
@@ -475,7 +476,6 @@ def generate_lithium(params):
     # ========================================================
 
     saturation_depth = calculate_saturation_depth(params)
-
 
     # ========================================================
     # GRID
@@ -501,6 +501,14 @@ def generate_lithium(params):
     particles_y = []
     particles_z = []
 
+    particles_R = []
+
+    # ========================================================
+    # PROPERTIES OF PHYSICAL AGGLOMERATES
+    # ========================================================
+
+    particles_slice = []
+
     total_particles = 0
 
     # ========================================================
@@ -510,8 +518,6 @@ def generate_lithium(params):
     # ========================================================
 
     r0 = 20e-4       # cm
-    # equivalent to:
-    # r0 = 2e-3 cm
 
     # ========================================================
     # VOLUME OF ONE PRIMARY 20 um PARTICLE
@@ -527,7 +533,6 @@ def generate_lithium(params):
     # POSSIBLE AGGLOMERATE RADII
     #
     # 20 -> 120 um
-    #
     # converted to cm
     # ========================================================
 
@@ -558,8 +563,7 @@ def generate_lithium(params):
     # TARGET NUMBER OF AGGLOMERATES
     # ========================================================
 
-    N_target_agg = params["N_target_agg"]
-    
+    N_min_agg = params["N_min_agg"]
 
     # ========================================================
     # PROBABILITY MATRIX
@@ -656,6 +660,8 @@ def generate_lithium(params):
 
         # ----------------------------------------------------
         # Theoretical number of 20 um particles
+        #
+        # This guarantees volume conservation.
         # ----------------------------------------------------
 
         N20_per_x[j] = int(
@@ -669,8 +675,12 @@ def generate_lithium(params):
     # 2. CALCULATE P(R | x)
     # ========================================================
 
-    sigma =  args.sigma_R
-    # 20-60 um expressed in cm
+    sigma = params["sigma_R"]
+
+    print(
+        sigma,
+        "um"
+    )
 
     for j, xi in enumerate(x_slices):
 
@@ -690,59 +700,77 @@ def generate_lithium(params):
 
         # ----------------------------------------------------
         # Physically possible radii
+        #
+        # At least N_min_agg agglomerates must be possible
         # ----------------------------------------------------
 
         possible = (
-            n_agg >= 1
+            n_agg >= N_min_agg
         )
 
         # ----------------------------------------------------
-        # Target number of agglomerates
+        # If no radius can generate the minimum number
+        # of agglomerates, force R = 20 um
         # ----------------------------------------------------
 
-        N_agg_target = max(
-            N20,
-            N_target_agg
-        )
+        if not any(possible):
 
-        # ----------------------------------------------------
-        # Radius conserving total volume
-        # ----------------------------------------------------
+            R_max = r0
 
-        R_target = (
-            r0 *
-            (
-                N20 /
-                N_agg_target
-            )**(1 / 3)
-        )
-
-        # ----------------------------------------------------
-        # Preference for target radius
-        # ----------------------------------------------------
-
-        preference = np.exp(
-            -0.5 *
-            (
-                (
+            i0 = np.argmin(
+                np.abs(
                     radii -
-                    R_target
-                ) /
-                sigma
-            )**2
-        )
+                    r0
+                )
+            )
 
-        # ----------------------------------------------------
-        # Weights
-        # ----------------------------------------------------
+            weights = np.zeros(
+                len(radii)
+            )
 
-        weights = np.zeros(
-            len(radii)
-        )
+            weights[i0] = 1.0
 
-        weights[possible] = (
-            preference[possible]
-        )
+        else:
+
+            # ------------------------------------------------
+            # Maximum radius compatible with at least
+            # N_min_agg agglomerates
+            # ------------------------------------------------
+
+            R_max = (
+                r0 *
+                (
+                    N20 /
+                    N_min_agg
+                )**(1 / 3)
+            )
+
+            # ------------------------------------------------
+            # Gaussian preference around R_max
+            # ------------------------------------------------
+
+            preference = np.exp(
+                -0.5 *
+                (
+                    (
+                        radii -
+                        R_max
+                    ) /
+                    sigma
+                )**2
+            )
+
+            # ------------------------------------------------
+            # Weights
+            # ------------------------------------------------
+
+            weights = np.zeros(
+                len(radii)
+            )
+
+            weights[possible] = (
+                preference[possible]
+            )
 
         # ----------------------------------------------------
         # Normalize
@@ -802,7 +830,8 @@ def generate_lithium(params):
     # ========================================================
 
     # --------------------------------------------------------
-    # Theoretical number of primary particles with r = 20 um
+    # Theoretical number of primary particles
+    # with r = 20 um
     # --------------------------------------------------------
 
     N20_theoretical = np.zeros(
@@ -829,10 +858,28 @@ def generate_lithium(params):
     )
 
     # --------------------------------------------------------
-    # Actually generated agglomerates
+    # Actually accepted agglomerates
     # --------------------------------------------------------
 
     N_agglomerates_accepted = np.zeros(
+        len(x_slices),
+        dtype=int
+    )
+
+    # --------------------------------------------------------
+    # Number of remaining primary 20 um particles
+    # --------------------------------------------------------
+
+    N20_remaining_per_x = np.zeros(
+        len(x_slices),
+        dtype=int
+    )
+
+    # --------------------------------------------------------
+    # Actually accepted primary 20 um particles
+    # --------------------------------------------------------
+
+    N20_remaining_accepted = np.zeros(
         len(x_slices),
         dtype=int
     )
@@ -883,38 +930,27 @@ def generate_lithium(params):
         )
 
         # ----------------------------------------------------
-        # VOLUME CONSERVATION
+        # NUMBER OF PRIMARY PARTICLES
+        # REPRESENTED BY ONE AGGLOMERATE
         #
-        # N20 * V20 = NR * VR
-        #
-        # therefore:
-        #
-        # NR = N20 * (r0/R)^3
+        # k = (R/r0)^3
         # ----------------------------------------------------
 
+        particles_per_agglomerate = (
+            R_sampled /
+            r0
+        )**3
 
-        '''
+        # ----------------------------------------------------
+        # NUMBER OF WHOLE AGGLOMERATES
+        # ----------------------------------------------------
+
         N_R = int(
             np.floor(
-                N20 *
-                (
-                    r0 /
-                    R_sampled
-                )**3
+                N20 /
+                particles_per_agglomerate
             )
         )
-        '''
-
-
-        N_R = max(
-                    N_target_agg,
-                    int(
-                        np.floor(
-                            N20 *
-                            (r0 / R_sampled)**3
-                        )
-                    )
-                )
 
         # ----------------------------------------------------
         # SAVE THEORETICAL NUMBER
@@ -1013,11 +1049,11 @@ def generate_lithium(params):
                 )
 
                 # ------------------------------------------------
-                # Save coordinates
+                # SAVE PHYSICAL AGGLOMERATE
                 # ------------------------------------------------
 
                 particles_x.append(
-                    x_particle 
+                    x_particle
                 )
 
                 particles_y.append(
@@ -1026,6 +1062,18 @@ def generate_lithium(params):
 
                 particles_z.append(
                     z_particle
+                )
+
+                particles_R.append(
+                    R_sampled
+                )
+
+                # ------------------------------------------------
+                # Save slice index
+                # ------------------------------------------------
+
+                particles_slice.append(
+                    j
                 )
 
                 accepted += 1
@@ -1040,30 +1088,208 @@ def generate_lithium(params):
             accepted
         )
 
-    # ========================================================
-    # 6. CONVERT COORDINATES TO NUMPY
-    # ========================================================
+        # ====================================================
+        # REMAINING PRIMARY 20 um PARTICLES
+        # ====================================================
 
-    #particles_x = np.array(particles_x ) + 0.005
-    shift = params["shift_x"]
+        # ----------------------------------------------------
+        # Number of primary particles consumed by the
+        # theoretical agglomerates
+        # ----------------------------------------------------
 
-    particles_x = np.array(particles_x)
-
-    x_max = np.max(particles_x)
-    
-    max_shift = params["FCCD"] - x_max
-    
-    if shift > max_shift:
-    
-        print(
-            f"Warning: requested shift_x = {shift:.6g} cm is too large. "
-            f"Maximum possible shift_x = {max_shift:.6g} cm. "
-            f"Using maximum allowed shift."
+        N20_used = (
+            N_R *
+            particles_per_agglomerate
         )
+
+        # ----------------------------------------------------
+        # Remaining primary particles
+        #
+        # We use floor because we accept losing at most
+        # one primary particle due to rounding.
+        # ----------------------------------------------------
+
+        N20_remaining = int(
+            np.floor(
+                N20 -
+                N20_used
+            )
+        )
+
+        # ----------------------------------------------------
+        # Safety against numerical floating point errors
+        # ----------------------------------------------------
+
+        N20_remaining = max(
+            N20_remaining,
+            0
+        )
+
+        N20_remaining_per_x[j] = (
+            N20_remaining
+        )
+
+        # ====================================================
+        # GENERATE REMAINING 20 um PARTICLES
+        # ====================================================
+
+        accepted_primary = 0
+        attempts_primary = 0
+
+        max_attempts_primary = max(
+            100,
+            N20_remaining * 200
+        )
+
+        while (
+            accepted_primary < N20_remaining and
+            attempts_primary < max_attempts_primary
+        ):
+
+            attempts_primary += 1
+
+            # ------------------------------------------------
+            # Random position inside x slice
+            # ------------------------------------------------
+
+            x_particle = (
+                xi +
+                np.random.random() *
+                dx
+            )
+
+            y_particle = (
+                np.random.random() *
+                Ly
+            )
+
+            z_particle = (
+                np.random.random() *
+                Lz
+            )
+
+            # ------------------------------------------------
+            # Fixed radius = 20 um
+            # ------------------------------------------------
+
+            R_primary = r0
+
+            # ------------------------------------------------
+            # OVERLAP CHECK
+            # ------------------------------------------------
+
+            if not is_overlapping(
+                x_particle,
+                y_particle,
+                z_particle,
+                R_primary,
+                cells,
+                nx,
+                ny,
+                nz
+            ):
+
+                # ------------------------------------------------
+                # Grid index
+                # ------------------------------------------------
+
+                ix, iy, iz = get_index(
+                    x_particle,
+                    y_particle,
+                    z_particle,
+                    nx,
+                    ny,
+                    nz
+                )
+
+                # ------------------------------------------------
+                # Create primary Li particle
+                # ------------------------------------------------
+
+                p = LiParticle(
+                    x_particle,
+                    y_particle,
+                    z_particle,
+                    R_primary
+                )
+
+                # ------------------------------------------------
+                # Add to grid
+                # ------------------------------------------------
+
+                cells[ix][iy][iz].append(
+                    p
+                )
+
+                # ------------------------------------------------
+                # SAVE PHYSICAL PRIMARY PARTICLE
+                # ------------------------------------------------
+
+                particles_x.append(
+                    x_particle
+                )
+
+                particles_y.append(
+                    y_particle
+                )
+
+                particles_z.append(
+                    z_particle
+                )
+
+                particles_R.append(
+                    R_primary
+                )
+
+                # ------------------------------------------------
+                # Save slice index
+                # ------------------------------------------------
+
+                particles_slice.append(
+                    j
+                )
+
+                accepted_primary += 1
+
+                total_particles += 1
+
+        # ----------------------------------------------------
+        # Save actually accepted primary particles
+        # ----------------------------------------------------
+
+        N20_remaining_accepted[j] = (
+                accepted_primary
+            )
     
-        shift = max_shift
+            #particles_x = np.array(particles_x ) + 0.005
+        shift = params["shift_x"]
     
-    particles_x = particles_x + shift
+        particles_x = np.array(particles_x)
+    
+        x_max = np.max(particles_x)
+        
+        max_shift = params["FCCD"] - x_max
+        
+        if shift > max_shift:
+        
+            print(
+                f"Warning: requested shift_x = {shift:.6g} cm is too large. "
+                f"Maximum possible shift_x = {max_shift:.6g} cm. "
+                f"Using maximum allowed shift."
+            )
+        
+            shift = max_shift
+        
+        particles_x = particles_x + shift
+
+
+    # ========================================================
+    # 6. CONVERT TO NUMPY
+    # ========================================================
+
+    #particles_x = np.array(
+    #    particles_x
+    #)
 
     particles_y = np.array(
         particles_y
@@ -1071,6 +1297,15 @@ def generate_lithium(params):
 
     particles_z = np.array(
         particles_z
+    )
+
+    particles_R = np.array(
+        particles_R
+    )
+
+    particles_slice = np.array(
+        particles_slice,
+        dtype=int
     )
 
     # ========================================================
@@ -1084,7 +1319,7 @@ def generate_lithium(params):
         # ----------------------------------------------------
 
         "x":
-            x_slices ,
+            x_slices,
 
         # ----------------------------------------------------
         # Theoretical number of primary Li
@@ -1113,7 +1348,21 @@ def generate_lithium(params):
         # ----------------------------------------------------
 
         "N_agglomerates_accepted":
-            N_agglomerates_accepted
+            N_agglomerates_accepted,
+
+        # ----------------------------------------------------
+        # Theoretical remaining primary 20 um particles
+        # ----------------------------------------------------
+
+        "N20_remaining":
+            N20_remaining_per_x,
+
+        # ----------------------------------------------------
+        # Actually accepted remaining primary particles
+        # ----------------------------------------------------
+
+        "N20_remaining_accepted":
+            N20_remaining_accepted
     }
 
     # ========================================================
@@ -1121,7 +1370,7 @@ def generate_lithium(params):
     # ========================================================
 
     print("")
-    '''
+
     print(
         "Total theoretical primary Li (R=20 um) =",
         np.sum(
@@ -1137,9 +1386,30 @@ def generate_lithium(params):
     )
 
     print(
+        "Total theoretical remaining 20 um particles =",
+        np.sum(
+            N20_remaining_per_x
+        )
+    )
+
+    print(
         "Total accepted agglomerates =",
+        np.sum(
+            N_agglomerates_accepted
+        )
+    )
+
+    print(
+        "Total accepted remaining 20 um particles =",
+        np.sum(
+            N20_remaining_accepted
+        )
+    )
+
+    print(
+        "Total accepted Li particles =",
         total_particles
-    )'''
+    )
 
     # ========================================================
     # 9. RETURN
@@ -1151,11 +1421,9 @@ def generate_lithium(params):
         particles_x,
         particles_y,
         particles_z,
-        lithium_distribution
+        particles_R,
+        lithium_distribution,
     )
-
-
-
 
 
 
