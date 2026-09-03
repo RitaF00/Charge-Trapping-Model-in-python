@@ -111,7 +111,9 @@ Lz = 0.2
 
 dx = 0.001      # cm = 10 um
 
-step = 0.005    # cm
+
+step = 0.005
+step = 0.0025    # cm
 
 
 
@@ -1261,35 +1263,56 @@ def generate_lithium(params):
                 accepted_primary
             )
     
-            #particles_x = np.array(particles_x ) + 0.005
-        shift = params["shift_x"]
+    #particles_x = np.array(particles_x ) + 0.005
+    shift = params["shift_x"]
     
-        particles_x = np.array(particles_x)
+    particles_x = np.array(particles_x)
     
-        x_max = np.max(particles_x)
+    x_max = np.max(particles_x)
         
-        max_shift = params["FCCD"] - x_max
+    max_shift = params["FCCD"] - x_max
+
+    
+    if max_shift < 0:
+        raise ValueError(
+            f"Li distribution already exceeds FCCD: "
+            f"x_max = {x_max:.6g} cm > FCCD = {params['FCCD']:.6g} cm"
+        )
+    
+    shift = params["shift_x"]
+    
+    if shift > max_shift:
+        print(
+            f"Warning: requested shift_x = {shift:.6g} cm is too large. "
+            f"Maximum possible shift_x = {max_shift:.6g} cm. "
+            f"Using maximum allowed shift."
+        )
+        shift = max_shift
+    
+    particles_x += shift
+    '''
+    if shift > max_shift:
         
-        if shift > max_shift:
-        
-            print(
+        print(
                 f"Warning: requested shift_x = {shift:.6g} cm is too large. "
                 f"Maximum possible shift_x = {max_shift:.6g} cm. "
                 f"Using maximum allowed shift."
             )
         
-            shift = max_shift
+        shift = max_shift
         
-        particles_x = particles_x + shift
+    particles_x = particles_x + shift
+
+    '''
 
 
     # ========================================================
     # 6. CONVERT TO NUMPY
     # ========================================================
 
-    #particles_x = np.array(
-    #    particles_x
-    #)
+    particles_x = np.array(
+        particles_x
+    )
 
     particles_y = np.array(
         particles_y
