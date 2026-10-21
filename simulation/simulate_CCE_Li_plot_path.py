@@ -1,0 +1,2483 @@
+
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.patches import Circle, Patch
+
+import math
+import os
+import argparse
+from numba import njit
+from scipy.special import erfc
+from tqdm import tqdm
+
+
+# ============================================================
+# ARGUMENTS
+# ============================================================
+
+parser = argparse.ArgumentParser(
+    description="Monte Carlo CCE simulation with Li trapping"
+)
+
+
+parser.add_argument(
+    "--seed",
+    type=int,
+    default=1,
+    help="Random seed"
+)
+
+parser.add_argument(
+    "--N_charges",
+    type=int,
+    default=20,
+    help="Number of charge carriers"
+)
+
+parser.add_argument(
+    "--N_repeat",
+    type=int,
+    default=20,
+    help="Number of repetitions per depth"
+)
+
+parser.add_argument(
+    "--alpha",
+    type=float,
+    default=1.6e-9,
+    help="Li precipitation coefficient"
+)
+
+parser.add_argument(
+    "--FCCD",
+    type=float,
+    default=0.1,
+    help="Full charge collection depth"
+)
+
+parser.add_argument(
+    "--T_ann",
+    type=float,
+    default=623,
+    help="Annealing temperature [K]"
+)
+
+parser.add_argument(
+    "--t_ann",
+    type=float,
+    default=1080,
+    help="Annealing time [s]"
+)
+
+
+parser.add_argument(
+    "--sigma_R",
+    type=float,
+    default=1080,
+    help="Radius distribution width [um]"
+)
+
+parser.add_argument(
+    "--N_min_agg",
+    type=float,
+    default=1080,
+    help="minimum number of lithium agglomerate"
+)
+
+parser.add_argument(
+    "--output",
+    type=str,
+    default="library",
+    help="Output directory"
+)
+
+
+# Used only when running the .py directly
+args = parser.parse_args([])
+
+
+
+# ============================================================
+# GEOMETRY (cm)
+# ============================================================
+
+Lx = 0.2
+Ly = 0.2
+Lz = 0.2
+
+
+dx = 0.001      # cm = 10 um
+
+step = 0.005    # cm
+
+
+
+
+
+
+
+# ============================================================
+# DIFFUSION
+# ============================================================
+
+D = 28.9       # cm2/ns
+
+dt = 1.0       # ns
+
+t_max = 10000
+
+Nt = int(t_max/dt)
+
+
+sigma = math.sqrt(2*D*dt)*1e-4   # evoluzione indipendente lungo le 3 direzioni
+
+
+
+# ============================================================
+# LITHIUM PARAMETERS
+# ============================================================
+
+r_Li = 0.002       # cm
+r_Li =0.012        # MAXIMUM RADII 
+cell_size = 2 * r_Li
+
+
+
+# ============================================================
+# ANNEALING MODEL
+# ============================================================
+
+R = 1.98
+
+H = 11800
+
+D0 = 2.5e-3
+
+
+Nd_saturation = 1e14
+
+
+
+# ============================================================
+# PARAMETER UPDATE
+# ============================================================
+
+def update_parameters(args):
+
+    """
+    Compute parameters depending on annealing conditions
+    """
+
+    params = {}
+
+    params["T_ann"] = args.T_ann
+
+    params["t_ann"] = args.t_ann
+
+    params["alpha"] = args.alpha
+
+    params["FCCD"] = args.FCCD
+
+    params["sigma_R"] = args.sigma_R
+
+    params["N_min_agg"] = args.N_min_agg
+
+    params["Ns"] = 10**(
+        21.27 - 2610/params["T_ann"]
+    )
+
+
+    params["D_Li"] = D0 * math.exp(
+        -H/(R*params["T_ann"])
+    )
+
+
+    return params
+
+
+
+# ============================================================
+# RANDOM INFO
+# ============================================================
+
+np.random.seed(args.seed)
+
+
+print("--------------------------------")
+print("CCE simulation")
+print("--------------------------------")
+print("seed =", args.seed)
+print("--------------------------------")
+
+
+
+# ============================================================
+# LITHIUM PARTICLE OBJECT
+# ============================================================
+
+class LiParticle:
+
+    __slots__ = (
+        "x",
+        "y",
+        "z",
+        "r"
+    )
+
+
+    def __init__(self, x, y, z, r):
+
+        self.x = x
+        self.y = y
+        self.z = z
+        self.r = r
+
+
+
+# ============================================================
+# GRID INDEXING
+# ============================================================
+
+def get_index(x, y, z, nx, ny, nz):
+
+
+    ix = int(x / cell_size)
+
+    iy = int(y / cell_size)
+
+    iz = int(z / cell_size)
+
+
+
+    ix = max(0, min(ix, nx-1))
+
+    iy = max(0, min(iy, ny-1))
+
+    iz = max(0, min(iz, nz-1))
+
+
+    return ix, iy, iz
+
+
+
+# ============================================================
+# OVERLAP CHECK
+# ============================================================
+
+def is_overlapping(
+        x,
+        y,
+        z,
+        r,
+        cells,
+        nx,
+        ny,
+        nz
+):
+
+
+    ix, iy, iz = get_index(
+        x,
+        y,
+        z,
+        nx,
+        ny,
+        nz
+    )
+
+
+
+    for dx_cell in (-1,0,1):
+
+        for dy_cell in (-1,0,1):
+
+            for dz_cell in (-1,0,1):
+
+
+                jx = ix + dx_cell
+
+                jy = iy + dy_cell
+
+                jz = iz + dz_cell
+
+
+
+                if (
+                    jx < 0 or
+                    jy < 0 or
+                    jz < 0 or
+                    jx >= nx or
+                    jy >= ny or
+                    jz >= nz
+                ):
+                    continue
+
+
+
+                for p in cells[jx][jy][jz]:
+
+
+                    distance2 = (
+                        (x-p.x)**2 +
+                        (y-p.y)**2 +
+                        (z-p.z)**2
+                    )
+
+
+                    if distance2 < (r+p.r)**2:
+
+                        return True
+
+
+
+    return False
+
+
+
+# ============================================================
+# GRID CREATION
+# ============================================================
+
+def create_grid():
+
+
+    nx = int(Lx/cell_size)
+
+    ny = int(Ly/cell_size)
+
+    nz = int(Lz/cell_size)
+
+
+
+    cells = [
+        [
+            [
+                []
+                for _ in range(nz)
+            ]
+            for _ in range(ny)
+        ]
+        for _ in range(nx)
+    ]
+
+
+    return cells, nx, ny, nz
+
+
+
+
+
+
+
+
+
+
+# ============================================================
+# SATURATION DEPTH
+# ============================================================
+
+def calculate_saturation_depth(params):
+
+
+    depth_list = np.arange(
+        0,
+        0.11 + dx,
+        dx
+    )
+
+
+    Nd_vals = params["Ns"] * erfc(
+        depth_list /
+        (2*np.sqrt(params["D_Li"] * params["t_ann"]))
+    )
+
+
+    idx = np.where(
+        Nd_vals <= Nd_saturation
+    )[0]
+
+
+    if len(idx) == 0:
+
+        saturation_depth = depth_list[-1]
+
+    else:
+
+        saturation_depth = depth_list[idx[0]]
+
+    #print(f"saturation depth {saturation_depth} cm")
+
+
+    return saturation_depth
+
+
+
+
+# ============================================================
+# TRUNCATED POISSON
+# ============================================================
+
+def truncated_poisson(lam, Nmax):
+
+
+    if Nmax <= 0:
+
+        return 0
+
+
+    for _ in range(100):
+
+        n = np.random.poisson(lam)
+
+        if n <= Nmax:
+
+            return n
+
+
+    return Nmax
+
+
+
+# ============================================================
+# SATURATION DEPTH
+# ============================================================
+
+def calculate_saturation_depth(params):
+
+    depth_list = np.arange(
+        0,
+        0.11 + dx,
+        dx
+    )
+
+    Nd_vals = (
+        params["Ns"] *
+        erfc(
+            depth_list /
+            (
+                2 *
+                np.sqrt(
+                    params["D_Li"] *
+                    params["t_ann"]
+                )
+            )
+        )
+    )
+
+    idx = np.where(
+        Nd_vals <= Nd_saturation
+    )[0]
+
+    if len(idx) == 0:
+
+        saturation_depth = depth_list[-1]
+
+    else:
+
+        saturation_depth = depth_list[idx[0]]
+
+    return saturation_depth
+
+
+# ============================================================
+# TRUNCATED POISSON
+# ============================================================
+
+def truncated_poisson(lam, Nmax):
+
+    if Nmax <= 0:
+        return 0
+
+    for _ in range(100):
+
+        n = np.random.poisson(lam)
+
+        if n <= Nmax:
+            return n
+
+    return Nmax
+
+
+# ============================================================
+# GENERATE LITHIUM
+# ============================================================
+def generate_lithium(params):
+
+    print("")
+
+    # ========================================================
+    # SATURATION DEPTH
+    # ========================================================
+
+    saturation_depth = calculate_saturation_depth(params)
+
+    # ========================================================
+    # GRID
+    # ========================================================
+
+    cells, nx, ny, nz = create_grid()
+
+    # ========================================================
+    # X SLICES
+    # ========================================================
+
+    x_slices = np.arange(
+        0,
+        saturation_depth,
+        dx
+    )
+
+    # ========================================================
+    # OUTPUT COORDINATES
+    # ========================================================
+
+    particles_x = []
+    particles_y = []
+    particles_z = []
+
+    particles_R = []
+
+    # ========================================================
+    # PROPERTIES OF PHYSICAL AGGLOMERATES
+    # ========================================================
+
+    particles_slice = []
+
+    total_particles = 0
+
+    # ========================================================
+    # PRIMARY Li RADIUS
+    #
+    # 20 um = 20e-4 cm = 2e-3 cm
+    # ========================================================
+
+    r0 = 20e-4       # cm
+
+    # ========================================================
+    # VOLUME OF ONE PRIMARY 20 um PARTICLE
+    # ========================================================
+
+    V_particle = (
+        4 / 3 *
+        math.pi *
+        r0**3
+    )
+
+    # ========================================================
+    # POSSIBLE AGGLOMERATE RADII
+    #
+    # 20 -> 120 um
+    # converted to cm
+    # ========================================================
+
+    radii_um = np.arange(
+        20,
+        121,
+        5
+    )
+
+    radii = (
+        radii_um *
+        1e-4
+    )
+
+    # ========================================================
+    # NUMBER OF PRIMARY 20 um PARTICLES REQUIRED
+    # FOR EACH AGGLOMERATE RADIUS
+    #
+    # k = (R/r0)^3
+    # ========================================================
+
+    k = (
+        radii /
+        r0
+    )**3
+
+    # ========================================================
+    # TARGET NUMBER OF AGGLOMERATES
+    # ========================================================
+
+    N_min_agg = params["N_min_agg"]
+
+    # ========================================================
+    # PROBABILITY MATRIX
+    #
+    # P[radius, x]
+    # ========================================================
+
+    P = np.zeros(
+        (
+            len(radii),
+            len(x_slices)
+        )
+    )
+
+    # ========================================================
+    # 1. THEORETICAL NUMBER OF 20 um Li
+    # ========================================================
+
+    N20_per_x = np.zeros(
+        len(x_slices),
+        dtype=int
+    )
+
+    print("")
+
+    for j, xi in enumerate(
+        tqdm(
+            x_slices,
+            desc="Calculating Li concentration"
+        )
+    ):
+
+        # ----------------------------------------------------
+        # Li concentration profile
+        # ----------------------------------------------------
+
+        Nd_val = (
+            params["Ns"] *
+            erfc(
+                xi /
+                (
+                    2 *
+                    np.sqrt(
+                        params["D_Li"] *
+                        params["t_ann"]
+                    )
+                )
+            )
+        )
+
+        # ----------------------------------------------------
+        # Particle density
+        # ----------------------------------------------------
+
+        density = (
+            params["alpha"] *
+            max(
+                Nd_val -
+                Nd_saturation,
+                0
+            )
+        )
+
+        # ----------------------------------------------------
+        # Slice volume
+        # ----------------------------------------------------
+
+        V_slice = (
+            dx *
+            Ly *
+            Lz
+        )
+
+        # ----------------------------------------------------
+        # Expected number of PRIMARY 20 um particles
+        # ----------------------------------------------------
+
+        lam = (
+            density *
+            V_slice
+        )
+
+        # ----------------------------------------------------
+        # Maximum geometrical packing
+        # ----------------------------------------------------
+
+        pf = 0.64
+
+        Nmax = int(
+            pf *
+            V_slice /
+            V_particle
+        )
+
+        # ----------------------------------------------------
+        # Theoretical number of 20 um particles
+        #
+        # This guarantees volume conservation.
+        # ----------------------------------------------------
+
+        N20_per_x[j] = int(
+            truncated_poisson(
+                lam,
+                Nmax
+            )
+        )
+
+    # ========================================================
+    # 2. CALCULATE P(R | x)
+    # ========================================================
+
+    sigma = params["sigma_R"]
+
+    print(
+        sigma,
+        "um"
+    )
+
+    for j, xi in enumerate(x_slices):
+
+        N20 = N20_per_x[j]
+
+        if N20 <= 0:
+            continue
+
+        # ----------------------------------------------------
+        # Number of agglomerates possible for each radius
+        # ----------------------------------------------------
+
+        n_agg = (
+            N20 /
+            k
+        )
+
+        # ----------------------------------------------------
+        # Physically possible radii
+        #
+        # At least N_min_agg agglomerates must be possible
+        # ----------------------------------------------------
+
+        possible = (
+            n_agg >= N_min_agg
+        )
+
+        # ----------------------------------------------------
+        # If no radius can generate the minimum number
+        # of agglomerates, force R = 20 um
+        # ----------------------------------------------------
+
+        if not any(possible):
+
+            R_max = r0
+
+            i0 = np.argmin(
+                np.abs(
+                    radii -
+                    r0
+                )
+            )
+
+            weights = np.zeros(
+                len(radii)
+            )
+
+            weights[i0] = 1.0
+
+        else:
+
+            # ------------------------------------------------
+            # Maximum radius compatible with at least
+            # N_min_agg agglomerates
+            # ------------------------------------------------
+
+            R_max = (
+                r0 *
+                (
+                    N20 /
+                    N_min_agg
+                )**(1 / 3)
+            )
+
+            # ------------------------------------------------
+            # Gaussian preference around R_max
+            # ------------------------------------------------
+
+            preference = np.exp(
+                -0.5 *
+                (
+                    (
+                        radii -
+                        R_max
+                    ) /
+                    sigma
+                )**2
+            )
+
+            # ------------------------------------------------
+            # Weights
+            # ------------------------------------------------
+
+            weights = np.zeros(
+                len(radii)
+            )
+
+            weights[possible] = (
+                preference[possible]
+            )
+
+        # ----------------------------------------------------
+        # Normalize
+        # ----------------------------------------------------
+
+        total = weights.sum()
+
+        if total > 0:
+
+            P[:, j] = (
+                weights /
+                total
+            )
+
+    # ========================================================
+    # 3. FUNCTION: SAMPLE RADIUS AT x
+    # ========================================================
+
+    def get_radius(x_value):
+
+        # ----------------------------------------------------
+        # Find closest x slice
+        # ----------------------------------------------------
+
+        j = np.argmin(
+            np.abs(
+                x_slices -
+                x_value
+            )
+        )
+
+        # ----------------------------------------------------
+        # Probability distribution
+        # ----------------------------------------------------
+
+        p = P[:, j]
+
+        # ----------------------------------------------------
+        # No valid distribution
+        # ----------------------------------------------------
+
+        if p.sum() <= 0:
+
+            return np.nan
+
+        # ----------------------------------------------------
+        # Sample radius
+        # ----------------------------------------------------
+
+        return np.random.choice(
+            radii,
+            p=p
+        )
+
+    # ========================================================
+    # 4. ARRAYS TO SAVE RESULTS
+    # ========================================================
+
+    # --------------------------------------------------------
+    # Theoretical number of primary particles
+    # with r = 20 um
+    # --------------------------------------------------------
+
+    N20_theoretical = np.zeros(
+        len(x_slices),
+        dtype=int
+    )
+
+    # --------------------------------------------------------
+    # Sampled agglomerate radius [cm]
+    # --------------------------------------------------------
+
+    R_sampled_per_x = np.full(
+        len(x_slices),
+        np.nan
+    )
+
+    # --------------------------------------------------------
+    # Theoretical number of agglomerates
+    # --------------------------------------------------------
+
+    N_agglomerates_theoretical = np.zeros(
+        len(x_slices),
+        dtype=int
+    )
+
+    # --------------------------------------------------------
+    # Actually accepted agglomerates
+    # --------------------------------------------------------
+
+    N_agglomerates_accepted = np.zeros(
+        len(x_slices),
+        dtype=int
+    )
+
+    # --------------------------------------------------------
+    # Number of remaining primary 20 um particles
+    # --------------------------------------------------------
+
+    N20_remaining_per_x = np.zeros(
+        len(x_slices),
+        dtype=int
+    )
+
+    # --------------------------------------------------------
+    # Actually accepted primary 20 um particles
+    # --------------------------------------------------------
+
+    N20_remaining_accepted = np.zeros(
+        len(x_slices),
+        dtype=int
+    )
+
+    # ========================================================
+    # 5. GENERATE AGGLOMERATES
+    # ========================================================
+
+    print("")
+
+    for j, xi in enumerate(
+        tqdm(
+            x_slices,
+            desc="Generating Li agglomerates"
+        )
+    ):
+
+        # ----------------------------------------------------
+        # Theoretical number of 20 um Li
+        # ----------------------------------------------------
+
+        N20 = N20_per_x[j]
+
+        N20_theoretical[j] = N20
+
+        if N20 <= 0:
+            continue
+
+        # ----------------------------------------------------
+        # Sample agglomerate radius
+        # ----------------------------------------------------
+
+        R_sampled = get_radius(
+            xi
+        )
+
+        if np.isnan(
+            R_sampled
+        ):
+            continue
+
+        # ----------------------------------------------------
+        # SAVE RADIUS [cm]
+        # ----------------------------------------------------
+
+        R_sampled_per_x[j] = (
+            R_sampled
+        )
+
+        # ----------------------------------------------------
+        # NUMBER OF PRIMARY PARTICLES
+        # REPRESENTED BY ONE AGGLOMERATE
+        #
+        # k = (R/r0)^3
+        # ----------------------------------------------------
+
+        particles_per_agglomerate = (
+            R_sampled /
+            r0
+        )**3
+
+        # ----------------------------------------------------
+        # NUMBER OF WHOLE AGGLOMERATES
+        # ----------------------------------------------------
+
+        N_R = int(
+            np.floor(
+                N20 /
+                particles_per_agglomerate
+            )
+        )
+
+        # ----------------------------------------------------
+        # SAVE THEORETICAL NUMBER
+        # ----------------------------------------------------
+
+        N_agglomerates_theoretical[j] = (
+            N_R
+        )
+
+        # ====================================================
+        # GENERATE N_R AGGLOMERATES
+        # ====================================================
+
+        accepted = 0
+        attempts = 0
+
+        max_attempts = max(
+            100,
+            N_R * 200
+        )
+
+        while (
+            accepted < N_R and
+            attempts < max_attempts
+        ):
+
+            attempts += 1
+
+            # ------------------------------------------------
+            # Random position inside x slice
+            # ------------------------------------------------
+
+            x_particle = (
+                xi +
+                np.random.random() *
+                dx
+            )
+
+            y_particle = (
+                np.random.random() *
+                Ly
+            )
+
+            z_particle = (
+                np.random.random() *
+                Lz
+            )
+
+            # ------------------------------------------------
+            # OVERLAP CHECK
+            #
+            # R_sampled is in cm
+            # ------------------------------------------------
+
+            if not is_overlapping(
+                x_particle,
+                y_particle,
+                z_particle,
+                R_sampled,
+                cells,
+                nx,
+                ny,
+                nz
+            ):
+
+                # ------------------------------------------------
+                # Grid index
+                # ------------------------------------------------
+
+                ix, iy, iz = get_index(
+                    x_particle,
+                    y_particle,
+                    z_particle,
+                    nx,
+                    ny,
+                    nz
+                )
+
+                # ------------------------------------------------
+                # Create agglomerate
+                # ------------------------------------------------
+
+                p = LiParticle(
+                    x_particle,
+                    y_particle,
+                    z_particle,
+                    R_sampled
+                )
+
+                # ------------------------------------------------
+                # Add to grid
+                # ------------------------------------------------
+
+                cells[ix][iy][iz].append(
+                    p
+                )
+
+                # ------------------------------------------------
+                # SAVE PHYSICAL AGGLOMERATE
+                # ------------------------------------------------
+
+                particles_x.append(
+                    x_particle
+                )
+
+                particles_y.append(
+                    y_particle
+                )
+
+                particles_z.append(
+                    z_particle
+                )
+
+                particles_R.append(
+                    R_sampled
+                )
+
+                # ------------------------------------------------
+                # Save slice index
+                # ------------------------------------------------
+
+                particles_slice.append(
+                    j
+                )
+
+                accepted += 1
+
+                total_particles += 1
+
+        # ----------------------------------------------------
+        # Save actually accepted agglomerates
+        # ----------------------------------------------------
+
+        N_agglomerates_accepted[j] = (
+            accepted
+        )
+
+        # ====================================================
+        # REMAINING PRIMARY 20 um PARTICLES
+        # ====================================================
+
+        # ----------------------------------------------------
+        # Number of primary particles consumed by the
+        # theoretical agglomerates
+        # ----------------------------------------------------
+
+        N20_used = (
+            N_R *
+            particles_per_agglomerate
+        )
+
+        # ----------------------------------------------------
+        # Remaining primary particles
+        #
+        # We use floor because we accept losing at most
+        # one primary particle due to rounding.
+        # ----------------------------------------------------
+
+        N20_remaining = int(
+            np.floor(
+                N20 -
+                N20_used
+            )
+        )
+
+        # ----------------------------------------------------
+        # Safety against numerical floating point errors
+        # ----------------------------------------------------
+
+        N20_remaining = max(
+            N20_remaining,
+            0
+        )
+
+        N20_remaining_per_x[j] = (
+            N20_remaining
+        )
+
+        # ====================================================
+        # GENERATE REMAINING 20 um PARTICLES
+        # ====================================================
+
+        accepted_primary = 0
+        attempts_primary = 0
+
+        max_attempts_primary = max(
+            100,
+            N20_remaining * 200
+        )
+
+        while (
+            accepted_primary < N20_remaining and
+            attempts_primary < max_attempts_primary
+        ):
+
+            attempts_primary += 1
+
+            # ------------------------------------------------
+            # Random position inside x slice
+            # ------------------------------------------------
+
+            x_particle = (
+                xi +
+                np.random.random() *
+                dx
+            )
+
+            y_particle = (
+                np.random.random() *
+                Ly
+            )
+
+            z_particle = (
+                np.random.random() *
+                Lz
+            )
+
+            # ------------------------------------------------
+            # Fixed radius = 20 um
+            # ------------------------------------------------
+
+            R_primary = r0
+
+            # ------------------------------------------------
+            # OVERLAP CHECK
+            # ------------------------------------------------
+
+            if not is_overlapping(
+                x_particle,
+                y_particle,
+                z_particle,
+                R_primary,
+                cells,
+                nx,
+                ny,
+                nz
+            ):
+
+                # ------------------------------------------------
+                # Grid index
+                # ------------------------------------------------
+
+                ix, iy, iz = get_index(
+                    x_particle,
+                    y_particle,
+                    z_particle,
+                    nx,
+                    ny,
+                    nz
+                )
+
+                # ------------------------------------------------
+                # Create primary Li particle
+                # ------------------------------------------------
+
+                p = LiParticle(
+                    x_particle,
+                    y_particle,
+                    z_particle,
+                    R_primary
+                )
+
+                # ------------------------------------------------
+                # Add to grid
+                # ------------------------------------------------
+
+                cells[ix][iy][iz].append(
+                    p
+                )
+
+                # ------------------------------------------------
+                # SAVE PHYSICAL PRIMARY PARTICLE
+                # ------------------------------------------------
+
+                particles_x.append(
+                    x_particle
+                )
+
+                particles_y.append(
+                    y_particle
+                )
+
+                particles_z.append(
+                    z_particle
+                )
+
+                particles_R.append(
+                    R_primary
+                )
+
+                # ------------------------------------------------
+                # Save slice index
+                # ------------------------------------------------
+
+                particles_slice.append(
+                    j
+                )
+
+                accepted_primary += 1
+
+                total_particles += 1
+
+        # ----------------------------------------------------
+        # Save actually accepted primary particles
+        # ----------------------------------------------------
+
+        N20_remaining_accepted[j] = (
+            accepted_primary
+        )
+
+    # ========================================================
+    # 6. CONVERT TO NUMPY
+    # ========================================================
+
+    particles_x = np.array(
+        particles_x
+    )
+
+    particles_y = np.array(
+        particles_y
+    )
+
+    particles_z = np.array(
+        particles_z
+    )
+
+    particles_R = np.array(
+        particles_R
+    )
+
+    particles_slice = np.array(
+        particles_slice,
+        dtype=int
+    )
+
+    # ========================================================
+    # 7. SAVE Li DISTRIBUTION
+    # ========================================================
+
+    lithium_distribution = {
+
+        # ----------------------------------------------------
+        # Depth [cm]
+        # ----------------------------------------------------
+
+        "x":
+            x_slices,
+
+        # ----------------------------------------------------
+        # Theoretical number of primary Li
+        # with r = 20 um
+        # ----------------------------------------------------
+
+        "N20_theoretical":
+            N20_theoretical,
+
+        # ----------------------------------------------------
+        # Sampled agglomerate radius [cm]
+        # ----------------------------------------------------
+
+        "R_sampled":
+            R_sampled_per_x,
+
+        # ----------------------------------------------------
+        # Theoretical number of agglomerates
+        # ----------------------------------------------------
+
+        "N_agglomerates_theoretical":
+            N_agglomerates_theoretical,
+
+        # ----------------------------------------------------
+        # Actually generated agglomerates
+        # ----------------------------------------------------
+
+        "N_agglomerates_accepted":
+            N_agglomerates_accepted,
+
+        # ----------------------------------------------------
+        # Theoretical remaining primary 20 um particles
+        # ----------------------------------------------------
+
+        "N20_remaining":
+            N20_remaining_per_x,
+
+        # ----------------------------------------------------
+        # Actually accepted remaining primary particles
+        # ----------------------------------------------------
+
+        "N20_remaining_accepted":
+            N20_remaining_accepted
+    }
+
+    # ========================================================
+    # 8. SUMMARY
+    # ========================================================
+
+    print("")
+
+    print(
+        "Total theoretical primary Li (R=20 um) =",
+        np.sum(
+            N20_theoretical
+        )
+    )
+
+    print(
+        "Total theoretical agglomerates =",
+        np.sum(
+            N_agglomerates_theoretical
+        )
+    )
+
+    print(
+        "Total theoretical remaining 20 um particles =",
+        np.sum(
+            N20_remaining_per_x
+        )
+    )
+
+    print(
+        "Total accepted agglomerates =",
+        np.sum(
+            N_agglomerates_accepted
+        )
+    )
+
+    print(
+        "Total accepted remaining 20 um particles =",
+        np.sum(
+            N20_remaining_accepted
+        )
+    )
+
+    print(
+        "Total accepted Li particles =",
+        total_particles
+    )
+
+    # ========================================================
+    # 9. RETURN
+    # ========================================================
+
+    return (
+        cells,
+        saturation_depth,
+        particles_x,
+        particles_y,
+        particles_z,
+        particles_R,
+        lithium_distribution,
+    )
+
+# ============================================================
+# NUMBA TRAPPING
+# ============================================================
+
+@njit
+def check_trapping_numba(
+        x,
+        y,
+        z,
+        particle_x,
+        particle_y,
+        particle_z,
+        N_particles,
+        r
+):
+
+
+    r2 = r*r
+
+
+
+    for i in range(N_particles):
+
+
+        dx = x - particle_x[i]
+
+        dy = y - particle_y[i]
+
+        dz = z - particle_z[i]
+
+
+
+        if (
+            dx*dx +
+            dy*dy +
+            dz*dz
+        ) < r2:
+
+            return True
+
+
+
+    return False
+
+
+
+
+
+
+# ============================================================
+# CHARGE TRANSPORT NUMBA
+# ============================================================
+
+@njit
+def charge_transport_numba(
+
+        x0,
+
+        N,
+
+        particle_x,
+
+        particle_y,
+
+        particle_z,
+
+        N_particles,
+
+        saturation_depth,
+
+        dx,
+
+        Lx,
+
+        Ly,
+
+        Lz,
+
+        Nt,
+
+        sigma,
+
+        FCCD,
+
+        r
+
+):
+
+    collected = 0
+
+    trapped = 0
+
+
+
+    for n in range(N):
+
+
+        x = x0
+
+        y = np.random.random()*Ly
+
+        z = np.random.random()*Lz
+
+
+
+        for step in range(Nt):
+
+
+            x += sigma*np.random.randn()
+
+            y += sigma*np.random.randn()
+
+            z += sigma*np.random.randn()
+
+
+
+            # reflective boundaries
+
+            if y < 0:
+
+                y = -y
+
+
+            if y > Ly:
+
+                y = 2*Ly-y
+
+
+
+            if z < 0:
+
+                z = -z
+
+
+            if z > Lz:
+
+                z = 2*Lz-z
+
+
+
+
+            # electrode
+            
+            
+            if x >= FCCD:
+
+                collected += 1
+
+                break
+
+
+
+
+            # dead layer
+
+            if x <= dx:
+
+                trapped += 1
+
+                break
+
+
+
+
+            # Li trapping
+
+            if x <= saturation_depth:
+
+
+                if check_trapping_numba(
+
+                    x,
+
+                    y,
+
+                    z,
+
+                    particle_x,
+
+                    particle_y,
+
+                    particle_z,
+
+                    N_particles,
+
+                    r
+
+                ):
+
+
+                    trapped += 1
+
+                    break
+
+
+
+    return collected, trapped
+
+
+
+# ============================================================
+# CCE SIMULATION
+# ============================================================
+
+def simulate_CCE(
+        cells,
+        saturation_depth,
+        particle_x,
+        particle_y,
+        particle_z,
+        args
+):
+
+
+    print("")
+    print("Starting CCE simulation...")
+    print("")
+
+
+
+    N_particles = len(particle_x)
+
+
+
+    x_positions = np.arange(
+        0,
+        args.FCCD  + 3*step,
+        step
+    )
+
+
+
+    CCE_matrix = np.zeros(
+        (
+            len(x_positions),
+            args.N_repeat
+        )
+    )
+
+
+
+    for i, x0 in enumerate(
+        tqdm(
+            x_positions,
+            desc="CCE depth"
+        )
+    ):
+
+
+
+
+
+        for j in range(args.N_repeat):
+
+
+            collected, trapped = charge_transport_numba(
+
+                x0,
+
+                args.N_charges,
+
+                particle_x,
+
+                particle_y,
+
+                particle_z,
+
+                N_particles,
+
+                saturation_depth,
+
+                dx,
+
+                Lx,
+
+                Ly,
+
+                Lz,
+
+                Nt,
+
+                sigma,
+
+                args.FCCD,
+
+                r_Li
+
+            )
+
+
+
+            CCE_matrix[i,j] = (
+
+                collected /
+
+                args.N_charges
+
+            )
+
+
+
+
+
+    CCE_mean = np.mean(
+        CCE_matrix,
+        axis=1
+    )
+
+
+
+    CCE_std = np.std(
+        CCE_matrix,
+        axis=1
+    )
+
+
+
+    return (
+
+        x_positions,
+
+        CCE_matrix,
+
+        CCE_mean,
+
+        CCE_std
+
+    )
+
+
+
+
+
+# ============================================================
+# SAVE RESULTS
+# ============================================================
+
+def save_results(
+        x_positions,
+        CCE_matrix,
+        CCE_mean,
+        CCE_std,
+        saturation_depth,
+        particle_x,
+        particle_y,
+        particle_z,
+        args,
+        params
+):
+
+
+    os.makedirs(
+        args.output,
+        exist_ok=True
+    )
+
+
+
+    filename = os.path.join(
+        args.output,
+        f"curve_{args.seed:06d}.npz"
+    )
+
+
+
+    np.savez(
+
+        filename,
+
+
+        # CCE
+
+        x=x_positions,
+
+        CCE=CCE_matrix,
+
+        CCE_mean=CCE_mean,
+
+        CCE_std=CCE_std,
+
+
+
+        # Li distribution
+
+        particle_x=particle_x,
+
+        particle_y=particle_y,
+
+        particle_z=particle_z,
+
+
+
+        # Detector
+
+        Lx=Lx,
+
+        Ly=Ly,
+
+        Lz=Lz,
+
+        FCCD_cm=args.FCCD,
+
+
+
+        # Lithium parameters
+
+        alpha=params["alpha"],
+
+        T_ann=params["T_ann"],
+
+        t_ann=params["t_ann"],
+
+        Ns=params["Ns"],
+
+        D_Li=params["D_Li"],
+
+        Nd_saturation=Nd_saturation,
+
+        saturation_depth=saturation_depth,
+
+
+
+        # Simulation parameters
+
+        N_charges=args.N_charges,
+
+        N_repeat=args.N_repeat,
+
+        seed=args.seed,
+
+        D=D,
+
+        dt=dt,
+
+        sigma=sigma
+
+    )
+
+
+
+    print("")
+    print("Saved:")
+    print(filename)
+    print("")
+
+def trace_single_hole(
+        x0,
+        particle_x,
+        particle_y,
+        particle_z,
+        particle_R,
+        saturation_depth,
+        FCCD
+):
+
+    x = x0
+    y = np.random.random() * Ly
+    z = np.random.random() * Lz
+
+    path_x = [x]
+    path_y = [y]
+    path_z = [z]
+
+    status = "timeout"
+
+    for _ in range(Nt):
+
+        x += sigma * np.random.randn()
+        y += sigma * np.random.randn()
+        z += sigma * np.random.randn()
+
+        # Bordi riflettenti lungo y
+        if y < 0:
+            y = -y
+        elif y > Ly:
+            y = 2 * Ly - y
+
+        # Bordi riflettenti lungo z
+        if z < 0:
+            z = -z
+        elif z > Lz:
+            z = 2 * Lz - z
+
+        path_x.append(x)
+        path_y.append(y)
+        path_z.append(z)
+
+        # Lacuna raccolta alla FCCD
+        if x >= FCCD:
+            status = "collected"
+            break
+
+        # Lacuna persa nello strato morto
+        if x <= dx:
+            status = "dead_layer"
+            break
+
+        # Lacuna persa in un agglomerato di litio
+        if x <= saturation_depth:
+
+            distance2 = (
+                (x - particle_x)**2
+                + (y - particle_y)**2
+                + (z - particle_z)**2
+            )
+
+            if np.any(distance2 < particle_R**2):
+                status = "lithium_trap"
+                break
+
+    return {
+        "x": np.asarray(path_x),
+        "y": np.asarray(path_y),
+        "z": np.asarray(path_z),
+        "status": status
+    }
+
+
+def find_example_paths(
+        x0,
+        particle_x,
+        particle_y,
+        particle_z,
+        particle_R,
+        saturation_depth,
+        FCCD,
+        max_trials=10000
+):
+
+    collected_path = None
+    lost_path = None
+
+    for _ in range(max_trials):
+
+        path = trace_single_hole(
+            x0,
+            particle_x,
+            particle_y,
+            particle_z,
+            particle_R,
+            saturation_depth,
+            FCCD
+        )
+
+        if path["status"] == "collected" and collected_path is None:
+            collected_path = path
+
+        if path["status"] in ("dead_layer", "lithium_trap"):
+            if lost_path is None:
+                lost_path = path
+
+        if collected_path is not None and lost_path is not None:
+            return collected_path, lost_path
+
+    raise RuntimeError(
+        "Non sono state trovate entrambe le traiettorie. "
+        "Aumentare max_trials oppure cambiare x0."
+    )
+
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+
+
+
+
+def plot_hole_paths2(
+            params,
+            collected_path,
+            lost_path,
+            particle_x,
+            particle_y,
+            particle_z,
+            particle_R,
+            FCCD
+        ):
+    
+        fig, ax = plt.subplots(figsize=(4,4), dpi = 300)
+    
+        # Conversione cm -> mm
+        z_collected = collected_path["z"] * 10
+        x_collected = collected_path["x"] * 10
+    
+        z_lost = lost_path["z"] * 10
+        x_lost = lost_path["x"] * 10
+    
+        FCCD_mm = FCCD * 10
+    
+        saturation_depth = calculate_saturation_depth(params)
+        saturation_depth_mm = saturation_depth * 10
+    
+        # ========================================================
+        # LITIO NELLA SEZIONE xz
+        # ========================================================
+    
+        # I due path possono appartenere a piani y differenti
+        y_collected = collected_path["y"][0]
+        y_lost = lost_path["y"][0]
+    
+        # Distanza degli agglomerati dai due piani
+        dy_collected = np.abs(particle_y - y_collected)
+        dy_lost = np.abs(particle_y - y_lost)
+    
+        # Un agglomerato interseca il piano se:
+        # |y_particle - y_plane| <= R
+        visible_collected = dy_collected <= particle_R
+        visible_lost = dy_lost <= particle_R
+    
+        visible = visible_collected | visible_lost
+        
+        for i in np.where(visible)[0]:
+    
+            section_radius_collected = 0.0
+            section_radius_lost = 0.0
+    
+            if visible_collected[i]:
+    
+                section_radius_collected = np.sqrt(
+                    particle_R[i]**2
+                    - dy_collected[i]**2
+                )
+    
+            if visible_lost[i]:
+    
+                section_radius_lost = np.sqrt(
+                    particle_R[i]**2
+                    - dy_lost[i]**2
+                )
+    
+            # Se interseca entrambi i piani, disegno la sezione maggiore
+            section_radius = max(
+                section_radius_collected,
+                section_radius_lost
+            )
+    
+            lithium_circle = Circle(
+                (
+                    particle_z[i] * 10,
+                    particle_x[i] * 10
+                ),
+                radius=section_radius * 10,
+                facecolor="silver",
+                edgecolor="grey",
+                linewidth=0.7,
+                alpha=0.45,
+                zorder=2
+            )
+    
+            ax.add_patch(lithium_circle)
+        
+        # ========================================================
+        # LACUNA RACCOLTA
+        # ========================================================
+    
+        ax.plot(
+            z_collected,
+            x_collected,
+            color="limegreen",
+            linewidth=1.2,
+            alpha=0.9,
+            zorder=4
+        )
+    
+        ax.scatter(
+            z_collected[0],
+            x_collected[0],
+            color="darkgreen",
+            marker="*",
+            s=130,
+            edgecolor="black",
+            linewidth=0.5,
+            zorder=6
+        )
+    
+
+        # ========================================================
+        # LACUNA PERSA
+        # ========================================================
+    
+        ax.plot(
+            z_lost,
+            x_lost,
+            color="deepskyblue",
+            linewidth=1.2,
+            alpha=0.9,
+            zorder=4
+        )
+    
+        ax.scatter(
+            z_lost[0],
+            x_lost[0],
+            color="navy",
+            marker="*",
+            s=130,
+            edgecolor="black",
+            linewidth=0.5,
+            zorder=6
+        )
+
+    
+        # ========================================================
+        # CONFINI
+        # ========================================================
+    
+        # Superficie x = 0
+        ax.axhline(
+            0,
+            color="saddlebrown",
+            linewidth=5,
+            zorder=3
+        )
+    
+        # Profondità di saturazione del litio
+        ax.axhline(
+            saturation_depth_mm,
+            color="gray",
+            linestyle=":",
+            linewidth=1,
+            zorder=3
+        )
+    
+        # FCCD
+        ax.axhline(
+            1,
+            color="black",
+            linestyle="--",
+            linewidth=2,
+            zorder=3
+        )
+    
+        # ========================================================
+        # GRAFICA
+        # ========================================================
+    
+        ax.set_xlim(0, 2)
+        ax.set_ylim(0, 1.2)
+    
+        # Superficie x = 0 in alto
+        ax.invert_yaxis()
+    
+        ax.set_xlabel("z [mm]")
+        ax.set_ylabel("Depth x [mm]")
+        
+    
+        ax.grid(
+            True,
+            color="lightgray",
+            linewidth=0.7,
+            alpha=0.7
+        )
+    
+        # ========================================================
+        # LEGENDA
+        # ========================================================
+    
+        legend_elements = [
+    
+            Line2D(
+                [0], [0],
+                color="limegreen",
+                linewidth=1.5,
+                label="Hole path: collected"
+            ),
+    
+            Line2D(
+                [0], [0],
+                color="deepskyblue",
+                linewidth=1.5,
+                label="Hole path: lost"
+            ),
+    
+            Patch(
+                facecolor="silver",
+                edgecolor="grey",
+                alpha=0.45,
+                label="Lithium agglomerate"
+            ),
+    
+            Line2D(
+                [0], [0],
+                marker="*",
+                color="none",
+                markerfacecolor="black",
+                markeredgecolor="black",
+                markersize=11,
+                label="Start position"
+            ),
+    
+            
+    
+            Line2D(
+                [0], [0],
+                color="gray",
+                linestyle=":",
+                linewidth=1,
+                label="Li saturation depth"
+            ),
+    
+            Line2D(
+                [0], [0],
+                color="black",
+                linestyle="--",
+                linewidth=2,
+                label="FCCD"
+            )
+        ]
+    
+        ax.legend(
+            handles=legend_elements,
+            loc="lower center",
+            bbox_to_anchor=(0.5, 1.02),
+            ncol=2,
+            fontsize=9,
+            framealpha=1,
+        )
+            
+        plt.tight_layout()
+        plt.show()
+
+
+
+    
+def plot_xz_paths(
+            collected_path,
+            lost_path,
+            particle_x,
+            particle_y,
+            particle_z,
+            particle_R,
+            FCCD
+    ):
+        
+
+        fig, axes = plt.subplots(
+            1,
+            2,
+            figsize=(12, 5),
+            sharex=True,
+            sharey=True
+        )
+    
+        paths = [collected_path, lost_path]
+        titles = [
+            "Lacuna che raggiunge la FCCD",
+            f"Lacuna persa: {lost_path['status']}"
+        ]
+        colors = ["tab:green", "tab:red"]
+    
+        for ax, path, title, color in zip(
+                axes, paths, titles, colors
+        ):
+    
+            # Piano xz corrispondente alla y iniziale della lacuna
+            y_slice = path["y"][0]
+    
+            # Particelle che intersecano questo piano xz
+            dy = np.abs(particle_y - y_slice)
+            visible = dy <= particle_R
+    
+            for xp, zp, rp, dyp in zip(
+                    particle_x[visible],
+                    particle_z[visible],
+                    particle_R[visible],
+                    dy[visible]
+            ):
+    
+                # Raggio dell'intersezione tra sfera e piano
+                section_radius = np.sqrt(rp**2 - dyp**2)
+    
+                circle = Circle(
+                    (xp * 10, zp * 10),
+                    section_radius * 10,
+                    facecolor="silver",
+                    edgecolor="grey",
+                    alpha=0.45
+                )
+    
+                ax.add_patch(circle)
+    
+            ax.plot(
+                path["x"] * 10,
+                path["z"] * 10,
+                color=color,
+                linewidth=1.2
+            )
+    
+            ax.scatter(
+                path["x"][0] * 10,
+                path["z"][0] * 10,
+                color="black",
+                marker="o",
+                label="Start",
+                zorder=4
+            )
+    
+    
+            ax.axvline(
+                FCCD * 10,
+                color="blue",
+                linestyle="--",
+                label="FCCD"
+            )
+
+            
+    
+            ax.axvspan(
+                0,
+                dx * 10,
+                color="gray",
+                alpha=0.3,
+                label="Strato morto"
+            )
+    
+            ax.set_xlim(-0.5, 1.1)
+            ax.set_ylim(0, Lz * 10)
+            ax.set_aspect("equal")
+            ax.set_xlabel("x [mm]")
+            ax.set_title(title)
+            ax.grid(alpha=0.2)
+            ax.legend()
+    
+        axes[0].set_ylabel("z [mm]")
+    
+        plt.tight_layout()
+        plt.show()
+# ============================================================
+# MAIN
+# ============================================================
+
+def main():
+
+
+
+    params = update_parameters(args)
+
+
+
+    print("--------------------------------")
+    print("CCE simulation")
+    print("--------------------------------")
+    print("seed =", args.seed)
+    print("T_ann =", params["T_ann"])
+    print("t_ann =", params["t_ann"])
+    print("alpha =", params["alpha"])
+    print("--------------------------------")
+
+
+
+    (
+        cells,
+        saturation_depth,
+        particle_x,
+        particle_y,
+        particle_z,
+        particle_R,
+        lithium_distribution
+    ) = generate_lithium(params)
+
+
+
+
+
+    (
+        x_positions,
+
+        CCE_matrix,
+
+        CCE_mean,
+
+        CCE_std
+
+    ) = simulate_CCE(
+
+        cells,
+
+        saturation_depth,
+
+        particle_x,
+
+        particle_y,
+
+        particle_z,
+
+        args
+
+    )
+
+    collected_path, lost_path = find_example_paths(
+        x0=0.05,
+        particle_x=particle_x,
+        particle_y=particle_y,
+        particle_z=particle_z,
+        particle_R=particle_R,
+        saturation_depth=saturation_depth,
+        FCCD=args.FCCD
+    )
+    
+    plot_xz_paths(
+        collected_path,
+        lost_path,
+        particle_x,
+        particle_y,
+        particle_z,
+        particle_R,
+        args.FCCD
+    )
+
+
+
+
+    save_results(
+
+        x_positions,
+
+        CCE_matrix,
+
+        CCE_mean,
+
+        CCE_std,
+
+        saturation_depth,
+
+        particle_x,
+
+        particle_y,
+
+        particle_z,
+
+        args,
+
+        params
+
+    )
+
+
+
+
+
+# ============================================================
+# RUN
+# ============================================================
+
+if __name__ == "__main__":
+
+    main()

@@ -18,7 +18,7 @@ parser = argparse.ArgumentParser(
 
 parser.add_argument(
     "--seed",
-    type=int,
+    # type=int,
     default=1,
     help="Random seed"
 )
@@ -74,11 +74,22 @@ parser.add_argument(
 )
 
 parser.add_argument(
+    "--N_sat",
+    type=float,
+    default=1e14,
+    help="Concentration of saturation of Li in Ge (cm^-3)"
+)
+
+
+'''
+parser.add_argument(
     "--N_min_agg",
     type=float,
     default=1080,
     help="minimum number of lithium agglomerate"
-)
+)'''
+
+
 
 parser.add_argument(
     "--output",
@@ -150,7 +161,7 @@ H = 11800
 D0 = 2.5e-3
 
 
-Nd_saturation = 1e14
+
 
 
 
@@ -176,7 +187,9 @@ def update_parameters(args):
 
     params["sigma_R"] = args.sigma_R
 
-    params["N_min_agg"] = args.N_min_agg
+    params["N_sat"] = args.N_sat
+
+    #params["N_min_agg"] = args.N_min_agg
 
     params["Ns"] = 10**(
         21.27 - 2610/params["T_ann"]
@@ -204,6 +217,8 @@ print("CCE simulation")
 print("--------------------------------")
 print("seed =", args.seed)
 print("--------------------------------")
+
+
 
 
 
@@ -381,7 +396,7 @@ def calculate_saturation_depth(params):
         dx
     )
 
-
+    nd_saturation = params["N_sat"]
     Nd_vals = params["Ns"] * erfc(
         depth_list /
         (2*np.sqrt(params["D_Li"] * params["t_ann"]))
@@ -440,11 +455,15 @@ def truncated_poisson(lam, Nmax):
 
 def calculate_saturation_depth(params):
 
+    
+
     depth_list = np.arange(
         0,
         0.11 + dx,
         dx
     )
+
+    Nd_saturation = params["N_sat"]
 
     Nd_vals = (
         params["Ns"] *
@@ -569,7 +588,7 @@ def generate_lithium(params):
     radii_um = np.arange(
         20,
         121,
-        5
+        1
     )
 
     radii = (
@@ -593,7 +612,7 @@ def generate_lithium(params):
     # TARGET NUMBER OF AGGLOMERATES
     # ========================================================
 
-    N_min_agg = params["N_min_agg"]
+    #N_min_agg = params["N_min_agg"]
 
     # ========================================================
     # PROBABILITY MATRIX
@@ -647,7 +666,9 @@ def generate_lithium(params):
         # ----------------------------------------------------
         # Particle density
         # ----------------------------------------------------
+        Nd_saturation = params["N_sat"]
 
+        
         density = (
             params["alpha"] *
             max(
@@ -733,7 +754,7 @@ def generate_lithium(params):
         #
         # At least N_min_agg agglomerates must be possible
         # ----------------------------------------------------
-
+        N_min_agg = 5
         possible = (
             n_agg >= N_min_agg
         )
@@ -1446,15 +1467,17 @@ def check_trapping_numba(
         particle_y,
         particle_z,
         N_particles,
-        r
+        particle_R
 ):
 
 
-    r2 = r*r
+
 
 
 
     for i in range(N_particles):
+
+        r2 = particle_R[i]**2
 
 
         dx = x - particle_x[i]
@@ -1517,7 +1540,7 @@ def charge_transport_numba(
 
         FCCD,
 
-        r
+        particle_R
 
 ):
 
@@ -1618,7 +1641,7 @@ def charge_transport_numba(
 
                     N_particles,
 
-                    r
+                    particle_R
 
                 ):
 
@@ -1643,6 +1666,7 @@ def simulate_CCE(
         particle_x,
         particle_y,
         particle_z,
+        particle_R,
         args
 ):
 
@@ -1718,7 +1742,7 @@ def simulate_CCE(
 
                 args.FCCD,
 
-                r_Li
+                particle_R
 
             )
 
@@ -1849,7 +1873,7 @@ def save_results(
 
         D_Li=params["D_Li"],
 
-        Nd_saturation=Nd_saturation,
+        Nd_saturation=params["N_sat"],
 
         saturation_depth=saturation_depth,
 
@@ -1914,7 +1938,11 @@ def main():
 
         particle_y,
 
-        particle_z
+        particle_z,
+
+        particle_R,
+
+        lithium_distribution
 
     ) = generate_lithium(params)
 
@@ -1942,6 +1970,8 @@ def main():
         particle_y,
 
         particle_z,
+
+        particle_R,
 
         args
 
